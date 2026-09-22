@@ -1,0 +1,101 @@
+# One-command startup for self-study or a classroom lab host (Phase 6):
+#
+#   docker compose up --build
+#
+# Then open:
+#   http://localhost:5173                room picker (start here)
+#   http://localhost:5173/closet.html    operator console (server closet)
+#   http://localhost:5173/office.html    office-wing console (3 zones)
+#   http://localhost:5173/attack.html    red-team console
+#   http://localhost:5173/defenses.html  defenses catalog + live controls
+#
+# -- on the same laptop for self-study, or from two different laptops on
+# the same LAN by pointing each browser's Connection Bar at this host's IP
+# instead of localhost (the runtime-configurable-target design from
+# Phase 4 already supports this; nothing to rebuild).
+#
+# One thing Compose doesn't paper over: the attack console's requests
+# happen server-side, inside the attack-console container, so "127.0.0.1"
+# in a scenario form (the default, correct for two-laptop or bare-metal
+# self-study) means the attack-console container itself here, not a twin.
+# Under Compose, type the target twin's service name -- "plant" or
+# "office-plant" -- into each scenario's Host field instead.
+#
+# DigiTwin is a public repo and this repo's pyproject.toml pulls it
+# straight from GitHub (see Dockerfile) -- no sibling checkout needed.
+#
+# After that first `docker compose up --build`, every later session can
+# skip the command line entirely: open Docker Desktop, find the "hvac-twin"
+# project (the `name:` below is what makes it show up under that name
+# instead of a folder-derived one), and use its Start/Stop button. The
+# per-service healthchecks below are what make that view meaningful --
+# without them Docker Desktop can only ever say "running", not whether a
+# service is actually answering yet -- and `frontend`'s `condition:
+# service_healthy` dependency means clicking Start won't hand you a page
+# that's live before its backends are.
+name: hvac-twin
+
+services:
+  plant:
+    build:
+      context: .
+    command: >
+      python -m hvac_twin.hmi examples/server_closet_controlled.toml
+      --host 0.0.0.0 --port 8100 --twin-host 0.0.0.0 --twin-port 5020
+    ports:
+      - "8100:8100" # HMI HTTP/WS API
+      - "5020:5020" # the twin's real Modbus port -- reachable directly too
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/status', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  office-plant:
+    build:
+      context: .
+    command: >
+      python -m hvac_twin.hmi examples/office_wing_controlled.toml
+      --host 0.0.0.0 --port 8101 --twin-host 0.0.0.0 --twin-port 5040
+    ports:
+      - "8101:8101"
+      - "5040:5040"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8101/status', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  attack-console:
+    build:
+      context: .
+    command: uvicorn hvac_twin.console:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/attacks', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    depends_on:
+      plant:
+        condition: service_healthy
+      office-plant:
+        condition: service_healthy
+      attack-console:
+        condition: service_healthy

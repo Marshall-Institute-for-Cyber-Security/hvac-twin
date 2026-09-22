@@ -1,0 +1,73 @@
+[project]
+name = "hvac-twin"
+version = "0.1.0"
+description = "HVAC digital twin: multi-room thermal physics, attack scenarios, and HMI on top of DigiTwin."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "digitwin",
+]
+
+[project.scripts]
+hvac-twin-live = "hvac_twin.live_runner:main"
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+modbus = [
+    "digitwin[modbus]",
+]
+console = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+# DigiTwin is public, so it resolves straight from GitHub -- no sibling
+# checkout required. Pin to a branch rather than a commit so a `uv lock
+# --upgrade` picks up new DigiTwin releases; switch to a tag once DigiTwin
+# starts cutting them.
+[tool.uv.sources]
+digitwin = { git = "https://github.com/Marshall-Institute-for-Cyber-Security/DigiTwin.git", branch = "main" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = "pymodbus.*"
+ignore_missing_imports = true
+
+# DigiTwin doesn't ship a py.typed marker, so mypy can't see its types from
+# outside the package even though DigiTwin itself runs mypy --strict
+# internally -- worth suggesting upstream. Until then, ignore here.
+[[tool.mypy.overrides]]
+module = "digitwin.*"
+ignore_missing_imports = true

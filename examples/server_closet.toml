@@ -1,0 +1,57 @@
+version = 1
+name = "server-closet"
+
+# A converted supply closet with server racks and no active cooling yet --
+# this is the Phase 1 physics-only checkpoint for the flagship attack
+# scenario (see docs/ROADMAP.md). No controller: nothing stops this room
+# from overheating on its own, which is exactly the point -- Phase 2 adds
+# the CRAC control loop that's actually supposed to prevent this.
+#
+# Temperatures in Fahrenheit; conductance/heat_capacity are per-degree
+# rates, divided by 1.8 from Celsius-based design values (see
+# examples/office_wing.toml). it_load's bias is a power (watts), not a
+# per-degree rate, so it is NOT divided by 1.8.
+
+[plc]
+model = "Generic"
+program = "noop"
+
+[executive]
+dt = 1.0
+
+[[plant.components]]
+type = "ConstantSignal"
+output_signal = "outdoor_temp"
+value = 41.0
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "closet_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "closet_loss"
+conductance = 25.0
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["closet_loss", -1.0]]
+bias = 2000.0
+output_signal = "closet_flux"
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "closet_temp"
+flux_signal = "closet_flux"
+heat_capacity = 222222.22
+temp = 71.6
+
+[[plant.components]]
+type = "Excess"
+input_signal = "closet_temp"
+output_signal = "closet_overtemp"
+threshold = 95.0
+
+[[plant.components]]
+type = "Integrator"
+input_signal = "closet_overtemp"
+output_signal = "closet_damage"
+out_max = 100.0

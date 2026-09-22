@@ -1,0 +1,180 @@
+version = 1
+name = "server-closet-controlled"
+
+# Same closet as examples/server_closet.toml, but now with a CRAC unit and
+# a bang-bang control program -- this is the twin Phase 3's attacks will
+# actually target. Unlike the uncontrolled twin, this one should never
+# cross its damage threshold under normal operation; Phase 3 attacks
+# (setpoint spoofing, sensor tampering, ...) are what's supposed to change
+# that.
+#
+# Temperatures in Fahrenheit; conductance/heat_capacity are per-degree
+# rates, divided by 1.8 (see examples/office_wing.toml). it_load and
+# crac_max_watts are powers, not per-degree rates, so NOT divided by 1.8.
+#
+# The PLC only ever sees closet_temp_sensed (an AnalogSensor-scaled integer,
+# tenths of a degree) -- never the plant's true float closet_temp. That gap
+# is deliberate: it's what "ground truth vs. sensed" means in practice, and
+# it's what Phase 3 attacks will target.
+
+[plc]
+model = "Generic"
+program = "crac_bang_bang"
+
+[executive]
+dt = 1.0
+
+[[tags]]
+name = "closet_temp_raw"
+type = "analog_input"
+address = "%IW0.0"
+
+[[tags]]
+name = "setpoint_tenths"
+type = "word"
+address = "%MW0"
+initial = 750
+
+[[tags]]
+name = "deadband_tenths"
+type = "word"
+address = "%MW1"
+initial = 20
+
+[[tags]]
+name = "alarm_threshold_tenths"
+type = "word"
+address = "%MW2"
+initial = 950
+
+[[tags]]
+name = "cooling_on"
+type = "internal_bit"
+address = "%M0"
+
+[[tags]]
+name = "high_temp_alarm"
+type = "internal_bit"
+address = "%M1"
+
+[[tags]]
+name = "cooling_relay"
+type = "discrete_output"
+address = "%Q0.0"
+
+[wiring.inputs]
+"%IW0.0" = "closet_temp_sensed"
+
+[wiring.outputs]
+"%Q0.0" = "cooling_command"
+
+[[plant.components]]
+type = "ConstantSignal"
+output_signal = "outdoor_temp"
+value = 41.0
+
+[[plant.components]]
+type = "Motor"
+command_signal = "cooling_command"
+speed_signal = "crac_speed"
+spin_up_s = 10.0
+coast_s = 5.0
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "closet_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "closet_loss"
+conductance = 25.0
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["closet_loss", -1.0], ["crac_speed", -2000.0]]
+bias = 2000.0
+output_signal = "closet_flux"
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "closet_temp"
+flux_signal = "closet_flux"
+heat_capacity = 222222.22
+temp = 71.6
+
+[[plant.components]]
+type = "AnalogSensor"
+source = "closet_temp"
+dest = "closet_temp_sensed"
+in_lo = 0.0
+in_hi = 200.0
+out_lo = 0
+out_hi = 2000
+
+[[plant.components]]
+type = "Excess"
+input_signal = "closet_temp"
+output_signal = "closet_overtemp"
+threshold = 95.0
+
+[[plant.components]]
+type = "Integrator"
+input_signal = "closet_overtemp"
+output_signal = "closet_damage"
+out_max = 100.0
+
+# Reachable over Modbus TCP -- no authentication, matching a real device's
+# Modbus map. setpoint_tenths uses TWO addresses deliberately: publishing
+# and accepting the same tag at the same address doesn't work (publish
+# always overwrites the wire with the tag's current value before accept
+# reads it back, so a remote write never survives) -- see
+# ModbusSlaveServer's docstring in DigiTwin. Address 0 is write-only
+# (accept): send the new setpoint there. Address 1 is read-only (publish):
+# an HMI reads the currently-effective setpoint there.
+#
+# Commissioning gotcha: any accept-mapped tag (setpoint_tenths, and now
+# alarm_threshold_tenths below) is overwritten from the accept register
+# store by ModbusSlaveServer.sync() EVERY tick, starting on tick 1,
+# whether or not any client has ever connected -- an address nothing has
+# written yet reads back as 0. That silently wipes the tag's TOML
+# `initial =` the moment the twin starts running, not just once a real
+# write arrives. Anything that runs this project file with the slave
+# server active (hvac_twin.live_runner, the test suite) needs one real
+# write to each accept register before/soon after start -- exactly the
+# writes an HMI would make while commissioning a fresh controller. Skip
+# the setpoint one and the CRAC runs full-blast indefinitely instead of
+# the documented ~75F cycle; skip the alarm-threshold one and
+# high_temp_alarm trips immediately and stays tripped (0 as a threshold
+# means "always over").
+
+[modbus.slave_server]
+host = "127.0.0.1"
+port = 5020
+
+[modbus.slave_server.publish]
+closet_temp_raw = { kind = "input_register", address = 0 }
+high_temp_alarm = { kind = "coil", address = 0 }
+cooling_relay = { kind = "coil", address = 1 }
+setpoint_tenths = { kind = "holding_register", address = 1 }
+alarm_threshold_tenths = { kind = "holding_register", address = 2 }
+
+[modbus.slave_server.accept]
+setpoint_tenths = { kind = "holding_register", address = 0 }
+# alarm_threshold_tenths gets the same two-address treatment as
+# setpoint_tenths, and the same commissioning requirement (see the note
+# above) -- but note the *direction* that default-zero failure mode goes
+# in each case. An uncommissioned setpoint (0) makes the CRAC run
+# full-blast forever: annoying, not dangerous. An uncommissioned alarm
+# threshold (0) makes high_temp_alarm trip immediately and stay tripped:
+# fails loud, not silent. That asymmetry is why this project exposes the
+# threshold rather than high_temp_alarm itself as accept-writable for the
+# "mask the alarm" scenario (see hvac_twin/attacks/alarm_mask.py) --
+# high_temp_alarm is recomputed from real temperature every scan and
+# always published honestly; an attacker who spoofs the threshold sky-high
+# makes that honest computation itself report "not alarming", which is a
+# more realistic deception than forcing the status bit directly (which,
+# given ModbusSlaveServer.sync()'s unconditional accept-overwrite, would
+# default to permanently masked from tick 1, attacker or not).
+alarm_threshold_tenths = { kind = "holding_register", address = 3 }
+
+[observability]
+historian = true
+events = true

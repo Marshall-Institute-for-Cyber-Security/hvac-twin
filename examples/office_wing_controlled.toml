@@ -1,0 +1,321 @@
+version = 1
+name = "office-wing-controlled"
+
+# Same three-room topology as examples/office_wing.toml, but now each room
+# has its own heater and a bang-bang control loop -- one PLC scanning all
+# three zones, the way a real multi-zone RTU controller works. Unlike the
+# server closet's CRAC (which *removes* heat because IT load pushes the
+# room hot), this is a *heating* loop -- outdoor is cold (41F) and nothing
+# else drives these rooms warm, so the bang-bang direction is inverted:
+# heat turns ON below setpoint - deadband, OFF above setpoint + deadband.
+#
+# Parameters (3000W heater, 72F setpoint, +/-2F deadband) were verified
+# numerically before writing: each room settles into a stable cycle
+# (~70-74F end rooms, ~71-72F middle room, which gets extra warmth from
+# its two heated neighbors) well within its comfort band, never near the
+# 50F freeze_alarm threshold.
+#
+# Temperatures in Fahrenheit; conductance/heat_capacity are per-degree
+# rates, divided by 1.8 (see examples/office_wing.toml). heater_watts is a
+# power, not a per-degree rate, so NOT divided by 1.8.
+#
+# Each room's PLC only ever sees {room}_temp_sensed (an AnalogSensor-scaled
+# integer, tenths of a degree) -- never the plant's true float {room}_temp.
+# Same ground-truth-vs-sensed gap as the server closet.
+
+[plc]
+model = "Generic"
+program = "office_wing_bang_bang"
+
+[executive]
+dt = 1.0
+
+[[tags]]
+name = "room_1_temp_raw"
+type = "analog_input"
+address = "%IW0.0"
+
+[[tags]]
+name = "room_1_setpoint_tenths"
+type = "word"
+address = "%MW0"
+initial = 720
+
+[[tags]]
+name = "room_1_deadband_tenths"
+type = "word"
+address = "%MW1"
+initial = 20
+
+[[tags]]
+name = "room_1_freeze_threshold_tenths"
+type = "word"
+address = "%MW2"
+initial = 500
+
+[[tags]]
+name = "room_1_heating_on"
+type = "internal_bit"
+address = "%M0"
+
+[[tags]]
+name = "room_1_freeze_alarm"
+type = "internal_bit"
+address = "%M1"
+
+[[tags]]
+name = "room_1_heating_relay"
+type = "discrete_output"
+address = "%Q0.0"
+
+[[tags]]
+name = "room_2_temp_raw"
+type = "analog_input"
+address = "%IW0.1"
+
+[[tags]]
+name = "room_2_setpoint_tenths"
+type = "word"
+address = "%MW3"
+initial = 720
+
+[[tags]]
+name = "room_2_deadband_tenths"
+type = "word"
+address = "%MW4"
+initial = 20
+
+[[tags]]
+name = "room_2_freeze_threshold_tenths"
+type = "word"
+address = "%MW5"
+initial = 500
+
+[[tags]]
+name = "room_2_heating_on"
+type = "internal_bit"
+address = "%M2"
+
+[[tags]]
+name = "room_2_freeze_alarm"
+type = "internal_bit"
+address = "%M3"
+
+[[tags]]
+name = "room_2_heating_relay"
+type = "discrete_output"
+address = "%Q0.1"
+
+[[tags]]
+name = "room_3_temp_raw"
+type = "analog_input"
+address = "%IW0.2"
+
+[[tags]]
+name = "room_3_setpoint_tenths"
+type = "word"
+address = "%MW6"
+initial = 720
+
+[[tags]]
+name = "room_3_deadband_tenths"
+type = "word"
+address = "%MW7"
+initial = 20
+
+[[tags]]
+name = "room_3_freeze_threshold_tenths"
+type = "word"
+address = "%MW8"
+initial = 500
+
+[[tags]]
+name = "room_3_heating_on"
+type = "internal_bit"
+address = "%M4"
+
+[[tags]]
+name = "room_3_freeze_alarm"
+type = "internal_bit"
+address = "%M5"
+
+[[tags]]
+name = "room_3_heating_relay"
+type = "discrete_output"
+address = "%Q0.2"
+
+[wiring.inputs]
+"%IW0.0" = "room_1_temp_sensed"
+"%IW0.1" = "room_2_temp_sensed"
+"%IW0.2" = "room_3_temp_sensed"
+
+[wiring.outputs]
+"%Q0.0" = "room_1_heating_command"
+"%Q0.1" = "room_2_heating_command"
+"%Q0.2" = "room_3_heating_command"
+
+[[plant.components]]
+type = "ConstantSignal"
+output_signal = "outdoor_temp"
+value = 41.0
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_1_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "flow_out_1"
+conductance = 22.222222
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_1_temp"
+temp_b_signal = "room_2_temp"
+flow_signal = "flow_1_2"
+conductance = 44.444444
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_2_temp"
+temp_b_signal = "room_3_temp"
+flow_signal = "flow_2_3"
+conductance = 44.444444
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_3_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "flow_out_3"
+conductance = 22.222222
+
+[[plant.components]]
+type = "Motor"
+command_signal = "room_1_heating_command"
+speed_signal = "room_1_heater_speed"
+spin_up_s = 10.0
+coast_s = 5.0
+
+[[plant.components]]
+type = "Motor"
+command_signal = "room_2_heating_command"
+speed_signal = "room_2_heater_speed"
+spin_up_s = 10.0
+coast_s = 5.0
+
+[[plant.components]]
+type = "Motor"
+command_signal = "room_3_heating_command"
+speed_signal = "room_3_heater_speed"
+spin_up_s = 10.0
+coast_s = 5.0
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_out_1", -1.0], ["flow_1_2", -1.0], ["room_1_heater_speed", 3000.0]]
+output_signal = "room_1_flux"
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_1_2", 1.0], ["flow_2_3", -1.0], ["room_2_heater_speed", 3000.0]]
+output_signal = "room_2_flux"
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_2_3", 1.0], ["flow_out_3", -1.0], ["room_3_heater_speed", 3000.0]]
+output_signal = "room_3_flux"
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_1_temp"
+flux_signal = "room_1_flux"
+heat_capacity = 555555.56
+temp = 71.6
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_2_temp"
+flux_signal = "room_2_flux"
+heat_capacity = 666666.67
+temp = 71.6
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_3_temp"
+flux_signal = "room_3_flux"
+heat_capacity = 555555.56
+temp = 71.6
+
+[[plant.components]]
+type = "AnalogSensor"
+source = "room_1_temp"
+dest = "room_1_temp_sensed"
+in_lo = 0.0
+in_hi = 200.0
+out_lo = 0
+out_hi = 2000
+
+[[plant.components]]
+type = "AnalogSensor"
+source = "room_2_temp"
+dest = "room_2_temp_sensed"
+in_lo = 0.0
+in_hi = 200.0
+out_lo = 0
+out_hi = 2000
+
+[[plant.components]]
+type = "AnalogSensor"
+source = "room_3_temp"
+dest = "room_3_temp_sensed"
+in_lo = 0.0
+in_hi = 200.0
+out_lo = 0
+out_hi = 2000
+
+# Reachable over Modbus TCP -- no authentication, same as the closet.
+# Each zone's setpoint uses TWO addresses (accept vs. publish), the same
+# reason as server_closet_controlled.toml's setpoint: publish always
+# overwrites the wire with the tag's current value before accept reads it
+# back, so writing and reading the same tag at the same address is
+# self-defeating. Holding registers 0-2 are write-only (accept) setpoints
+# per zone; 3-5 mirror them read-only (publish). Input registers 0-2 are
+# each zone's raw sensed temperature; coils 0-2 are freeze alarms, 3-5 are
+# heating relay states.
+#
+# Commissioning gotcha: same as the closet (see its own comment) --
+# ModbusSlaveServer.sync() overwrites every accept-mapped tag from its
+# register store on every tick, defaulting to 0 for any address nothing
+# has written yet, starting on tick 1 regardless of whether a client ever
+# connects. Skip commissioning and every zone's setpoint reads as 0F,
+# which immediately (and permanently) shuts off all three heaters --
+# exactly the compromised-EWS attack this file exists to demonstrate
+# (hvac_twin/attacks/compromised_ews.py), just triggered by nobody
+# instead of an attacker. hvac_twin.live_runner commissions every
+# accept-mapped tag automatically; anything else running this file with
+# the slave server active needs to write each zone's setpoint once first.
+
+[modbus.slave_server]
+host = "127.0.0.1"
+port = 5040
+
+[modbus.slave_server.publish]
+room_1_temp_raw = { kind = "input_register", address = 0 }
+room_2_temp_raw = { kind = "input_register", address = 1 }
+room_3_temp_raw = { kind = "input_register", address = 2 }
+room_1_freeze_alarm = { kind = "coil", address = 0 }
+room_2_freeze_alarm = { kind = "coil", address = 1 }
+room_3_freeze_alarm = { kind = "coil", address = 2 }
+room_1_heating_relay = { kind = "coil", address = 3 }
+room_2_heating_relay = { kind = "coil", address = 4 }
+room_3_heating_relay = { kind = "coil", address = 5 }
+room_1_setpoint_tenths = { kind = "holding_register", address = 3 }
+room_2_setpoint_tenths = { kind = "holding_register", address = 4 }
+room_3_setpoint_tenths = { kind = "holding_register", address = 5 }
+
+[modbus.slave_server.accept]
+room_1_setpoint_tenths = { kind = "holding_register", address = 0 }
+room_2_setpoint_tenths = { kind = "holding_register", address = 1 }
+room_3_setpoint_tenths = { kind = "holding_register", address = 2 }
+
+[observability]
+historian = true
+events = true

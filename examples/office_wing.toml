@@ -1,0 +1,90 @@
+version = 1
+name = "office-wing"
+
+# Three rooms in a row: room_1 - room_2 - room_3.  room_1 and room_3 each
+# have an exterior wall to outdoor; room_2 is interior, coupled only to its
+# neighbors.  No controller yet.  This is the Phase 1 physics-only checkpoint.
+# dt is large (30s) because nothing here needs control-loop responsiveness yet.
+# Phase 2 will need a smaller dt once a real PID setpoint loop is added.
+#
+# Temperatures are in degrees Fahrenheit. Conductance (W/deg) and
+# heat_capacity (J/deg) are "per degree" rates, not temperatures -- a degree F
+# is a smaller step than a degree C (1 C = 1.8 F), so those values are the
+# original Celsius-based design numbers divided by 1.8, not run through the
+# C-to-F formula. temp/value fields ARE run through that formula (x9/5+32).
+
+[plc]
+model = "Generic"
+program = "noop"
+
+[executive]
+dt = 30.0
+
+[[plant.components]]
+type = "ConstantSignal"
+output_signal = "outdoor_temp"
+value = 41.0
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_1_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "flow_out_1"
+conductance = 22.222222
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_1_temp"
+temp_b_signal = "room_2_temp"
+flow_signal = "flow_1_2"
+conductance = 44.444444
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_2_temp"
+temp_b_signal = "room_3_temp"
+flow_signal = "flow_2_3"
+conductance = 44.444444
+
+[[plant.components]]
+type = "HeatFlowLink"
+temp_a_signal = "room_3_temp"
+temp_b_signal = "outdoor_temp"
+flow_signal = "flow_out_3"
+conductance = 22.222222
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_out_1", -1.0], ["flow_1_2", -1.0]]
+output_signal = "room_1_flux"
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_1_2", 1.0], ["flow_2_3", -1.0]]
+output_signal = "room_2_flux"
+
+[[plant.components]]
+type = "WeightedSum"
+terms = [["flow_2_3", 1.0], ["flow_out_3", -1.0]]
+output_signal = "room_3_flux"
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_1_temp"
+flux_signal = "room_1_flux"
+heat_capacity = 555555.56
+temp = 71.6
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_2_temp"
+flux_signal = "room_2_flux"
+heat_capacity = 666666.67
+temp = 71.6
+
+[[plant.components]]
+type = "ThermalNode"
+temp_signal = "room_3_temp"
+flux_signal = "room_3_flux"
+heat_capacity = 555555.56
+temp = 71.6
